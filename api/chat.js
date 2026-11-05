@@ -22,18 +22,26 @@ module.exports=async(req,res)=>{
     if(gk){
       // Google Gemini (có gói miễn phí trong Google AI Studio)
       const model=process.env.GEMINI_MODEL||"gemini-3.5-flash";
-      const r=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+model+":generateContent",{
-        method:"POST",
-        headers:{"content-type":"application/json","x-goog-api-key":gk},
-        body:JSON.stringify({
-          systemInstruction:{parts:[{text:system}]},
-          contents:messages.map(m=>({role:m.role==="assistant"?"model":"user",parts:[{text:m.content}]})),
-          generationConfig:{maxOutputTokens:2048}
-        })
-      });
-      const d=await r.json();
-      if(!r.ok){console.error(JSON.stringify(d));return res.status(r.status===429?429:502).json({error:r.status===429?"Đã hết lượt miễn phí, hãy thử lại sau.":"Gemini đang bận, hãy thử lại."})}
-      text=((d.candidates&&d.candidates[0]&&d.candidates[0].content&&d.candidates[0].content.parts)||[]).map(x=>x.text||"").join("");
+      let failed=false;
+      for(let i=0;i<2&&!text;i++){
+        const r=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+model+":generateContent",{
+          method:"POST",
+          headers:{"content-type":"application/json","x-goog-api-key":gk},
+          body:JSON.stringify({
+            systemInstruction:{parts:[{text:system}]},
+            contents:messages.map(m=>({role:m.role==="assistant"?"model":"user",parts:[{text:m.content}]})),
+            generationConfig:{maxOutputTokens:2048}
+          })
+        });
+        const d=await r.json();
+        if(r.status===429)return res.status(429).json({error:"Đã hết lượt miễn phí, hãy thử lại sau."});
+        if(!r.ok){failed=true;console.error("Gemini error",r.status,JSON.stringify(d));continue}
+        failed=false;
+        text=((d.candidates&&d.candidates[0]&&d.candidates[0].content&&d.candidates[0].content.parts)||[]).map(x=>x.text||"").join("");
+        if(!text)console.error("Gemini empty reply",JSON.stringify(d).slice(0,600));
+      }
+      if(!text&&failed)return res.status(502).json({error:"Gemini đang bận, hãy thử lại."});
+      if(!text)text="Bơ chưa nghĩ ra câu trả lời. Bạn nói rõ hơn một chút được không?";
     }else{
       const r=await fetch("https://api.anthropic.com/v1/messages",{
         method:"POST",

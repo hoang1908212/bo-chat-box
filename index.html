@@ -49,6 +49,11 @@ textarea:focus-visible,button:focus-visible,select:focus-visible{outline:3px sol
 .dots::after{content:"…";animation:b 1s steps(3) infinite}
 @keyframes b{50%{opacity:.3}}
 @media (prefers-reduced-motion:reduce){.dots::after{animation:none}}
+.ico{width:42px;background:var(--surface);border:2px solid var(--line);border-radius:14px;cursor:pointer;font-size:1.1rem}
+.ico.on{background:var(--accent);border-color:var(--accent)}
+#pv{display:flex;gap:6px;padding:6px 16px 0;flex-wrap:wrap}
+#pv img{width:56px;height:56px;object-fit:cover;border-radius:10px;border:2px solid var(--line);cursor:pointer}
+.msg img{max-width:120px;max-height:120px;border-radius:10px;margin:0 6px 6px 0;display:block}
 </style>
 </head>
 <body>
@@ -58,10 +63,15 @@ textarea:focus-visible,button:focus-visible,select:focus-visible{outline:3px sol
     <select id="pers" aria-label="Tính cách">
       <option>Thân thiện</option><option>Giáo viên</option><option>Hài hước</option>
     </select>
+    <button class="ghost" id="spk" type="button">🔊 Đọc to: Tắt</button>
     <button class="ghost" id="clear" type="button">Cuộc trò chuyện mới</button>
   </header>
   <div id="log" aria-live="polite"></div>
+  <div id="pv"></div>
   <form id="f">
+    <button class="ico" id="att" type="button" aria-label="Đính kèm ảnh hoặc video">📎</button>
+    <input type="file" id="file" accept="image/*,video/*" multiple hidden>
+    <button class="ico" id="mic" type="button" aria-label="Nói bằng giọng nói">🎤</button>
     <textarea id="in" rows="1" placeholder="Nhắn cho Bơ…" aria-label="Tin nhắn"></textarea>
     <button id="send" type="submit">Gửi</button>
   </form>
@@ -89,12 +99,15 @@ function add(cls,text){
   const d=document.createElement("div");d.className="msg "+cls;d.textContent=text;log.appendChild(d);log.scrollTop=log.scrollHeight;return d;
 }
 function note(text){const d=document.createElement("div");d.className="err";d.textContent=text;log.appendChild(d);log.scrollTop=log.scrollHeight}
-function msgs(){const m=hist.slice(-20).map(x=>({role:x.role,content:x.content}));if(m[0]&&m[0].role!=="user")m.shift();return m}
+function msgs(){const h=hist.slice(-20),last=h.length-1;const m=h.map((x,i)=>({role:x.role,content:x.imgs&&x.imgs.length&&i!==last?x.content+" (người dùng đã gửi hình ảnh trước đó)":x.content,images:i===last&&x.imgs?x.imgs:[]}));if(m[0]&&m[0].role!=="user")m.shift();return m}
 async function submit(){
-  const text=inp.value.trim();
-  if(!text||busy)return;
+  let text=inp.value.trim();
+  if((!text&&!atts.length)||busy)return;
+  if(!text)text="Hãy xem giúp mình nội dung này.";
   inp.value="";resize();
-  add("me",text);hist.push({role:"user",content:text});
+  const mine=add("me",text);const imgs=atts.map(a=>({mime:"image/jpeg",data:a.data}));
+  atts.forEach(a=>{const im=document.createElement("img");im.src=a.url;im.alt="Ảnh đã gửi";mine.prepend(im)});
+  hist.push({role:"user",content:text,imgs});atts=[];renderPv();
   const b=add("bot","");b.classList.add("dots");
   busy=true;send.textContent="Dừng";send.type="button";ctrl=new AbortController();
   try{
@@ -102,7 +115,7 @@ async function submit(){
     const data=await res.json().catch(()=>({}));
     if(!res.ok){const er=new Error(data.error||"");er.code=res.status===429?"rate_limited":"error";throw er}
     const r={text:data.text};
-    b.classList.remove("dots");b.textContent=r.text;hist.push({role:"assistant",content:r.text});
+    b.classList.remove("dots");b.textContent=r.text;hist.push({role:"assistant",content:r.text});speak(r.text);
   }catch(e){
     b.classList.remove("dots");
     if(ctrl.signal.aborted){const t=b.textContent;if(t){hist.push({role:"assistant",content:t})}else{b.remove();hist.pop()}}
@@ -118,7 +131,41 @@ document.getElementById("f").addEventListener("submit",e=>{e.preventDefault();su
 send.addEventListener("click",()=>{if(busy&&ctrl)ctrl.abort()});
 inp.addEventListener("input",resize);
 inp.addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey&&!e.isComposing){e.preventDefault();submit()}});
-document.getElementById("clear").addEventListener("click",()=>{if(ctrl)ctrl.abort();hist=[];hint()});
+document.getElementById("clear").addEventListener("click",()=>{if(ctrl)ctrl.abort();hist=[];atts=[];renderPv();if(window.speechSynthesis)speechSynthesis.cancel();hint()});
+let atts=[],spkOn=false;
+const pv=document.getElementById("pv"),fileIn=document.getElementById("file");
+function renderPv(){pv.innerHTML="";atts.forEach((a,i)=>{const im=document.createElement("img");im.src=a.url;im.alt="Bấm để bỏ ảnh này";im.title="Bấm để bỏ";im.onclick=()=>{atts.splice(i,1);renderPv()};pv.appendChild(im)})}
+function shrink(src,w,h,max){const k=Math.min(1,max/Math.max(w,h)),c=document.createElement("canvas");c.width=Math.round(w*k);c.height=Math.round(h*k);c.getContext("2d").drawImage(src,0,0,c.width,c.height);const u=c.toDataURL("image/jpeg",.8);return{url:u,data:u.split(",")[1]}}
+function loadImg(f){return new Promise((ok,no)=>{const im=new Image();im.onload=()=>ok(shrink(im,im.naturalWidth,im.naturalHeight,1024));im.onerror=no;im.src=URL.createObjectURL(f)})}
+function frames(f){return new Promise((ok,no)=>{const v=document.createElement("video");v.muted=true;v.preload="auto";v.src=URL.createObjectURL(f);const out=[];v.onerror=no;
+  v.onloadedmetadata=()=>{const n=4,d=v.duration||1;let i=0;const next=()=>{if(i>=n)return ok(out);v.currentTime=Math.min(d-.05,d*(i+.5)/n)};v.onseeked=()=>{out.push(shrink(v,v.videoWidth,v.videoHeight,768));i++;next()};next()}})}
+fileIn.addEventListener("change",async()=>{
+  for(const f of fileIn.files){
+    try{
+      if(f.type.startsWith("video/")){
+        if(f.size>150e6){note("Video quá lớn, hãy chọn video dưới 150 MB.");continue}
+        atts.push(...await frames(f));note("Mình xem được hình ảnh trong video (4 khung hình), chưa nghe được tiếng.");
+      }else if(f.type.startsWith("image/"))atts.push(await loadImg(f));
+    }catch(e){note("Không đọc được tệp "+f.name)}
+  }
+  atts=atts.slice(0,4);renderPv();fileIn.value="";
+});
+document.getElementById("att").addEventListener("click",()=>fileIn.click());
+const spk=document.getElementById("spk");
+spk.addEventListener("click",()=>{spkOn=!spkOn;spk.textContent="🔊 Đọc to: "+(spkOn?"Bật":"Tắt");if(!spkOn&&window.speechSynthesis)speechSynthesis.cancel()});
+function speak(t){if(!spkOn||!window.speechSynthesis)return;speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t);u.lang="vi-VN";const v=speechSynthesis.getVoices().find(x=>x.lang&&x.lang.toLowerCase().startsWith("vi"));if(v)u.voice=v;speechSynthesis.speak(u)}
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition,mic=document.getElementById("mic");let rec=null;
+if(!SR)mic.style.display="none";
+mic.addEventListener("click",()=>{
+  if(rec){rec.stop();return}
+  if(window.speechSynthesis)speechSynthesis.cancel();
+  rec=new SR();rec.lang="vi-VN";rec.interimResults=true;rec.continuous=false;
+  const base=inp.value?inp.value+" ":"";mic.classList.add("on");
+  rec.onresult=e=>{let t="";for(const r of e.results)t+=r[0].transcript;inp.value=base+t;resize()};
+  rec.onerror=()=>{note("Không nghe được. Hãy cho phép dùng micro cho trang này.")};
+  rec.onend=()=>{mic.classList.remove("on");rec=null;if(inp.value.trim()&&!busy)submit()};
+  rec.start();
+});
 hint();
 if("serviceWorker" in navigator)navigator.serviceWorker.register("/sw.js").catch(()=>{});
 </script>

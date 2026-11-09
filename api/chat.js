@@ -5,6 +5,7 @@ const PERS={
   "Hài hước":"Bạn vui tính, hay đùa nhẹ nhàng nhưng vẫn trả lời đúng và hữu ích."
 };
 const hits=new Map();
+const imgs=m=>(Array.isArray(m.images)?m.images:[]).filter(i=>i&&typeof i.data==="string"&&i.data.length<2000000&&/^image\/(jpeg|png|webp)$/.test(i.mime)).slice(0,4);
 module.exports=async(req,res)=>{
   if(req.method!=="POST")return res.status(405).json({error:"Method not allowed"});
   const ip=String(req.headers["x-forwarded-for"]||"anon").split(",")[0].trim();
@@ -29,7 +30,7 @@ module.exports=async(req,res)=>{
           headers:{"content-type":"application/json","x-goog-api-key":gk},
           body:JSON.stringify({
             systemInstruction:{parts:[{text:system}]},
-            contents:messages.map(m=>({role:m.role==="assistant"?"model":"user",parts:[{text:m.content}]})),
+            contents:messages.map(m=>({role:m.role==="assistant"?"model":"user",parts:[{text:m.content},...imgs(m).map(i=>({inlineData:{mimeType:i.mime,data:i.data}}))]})),
             generationConfig:{maxOutputTokens:2048}
           })
         });
@@ -46,7 +47,7 @@ module.exports=async(req,res)=>{
       const r=await fetch("https://api.anthropic.com/v1/messages",{
         method:"POST",
         headers:{"content-type":"application/json","x-api-key":ak,"anthropic-version":"2023-06-01"},
-        body:JSON.stringify({model:process.env.MODEL||"claude-sonnet-5-5",max_tokens:1000,system,messages})
+        body:JSON.stringify({model:process.env.MODEL||"claude-sonnet-5-5",max_tokens:1000,system,messages:messages.map(m=>({role:m.role,content:imgs(m).length?[...imgs(m).map(i=>({type:"image",source:{type:"base64",media_type:i.mime,data:i.data}})),{type:"text",text:m.content}]:m.content}))})
       });
       const d=await r.json();
       if(!r.ok)return res.status(502).json({error:"Claude đang bận, hãy thử lại."});
